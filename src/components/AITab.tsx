@@ -24,58 +24,6 @@ const SUPPORTED_MIMES = [
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
 
-const MODELS_TO_TRY = [
-  'gemini-2.5-flash',
-  'gemini-2.0-flash-001',
-  'gemini-1.5-flash',
-  'gemini-1.5-pro',
-];
-
-const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY as string | undefined;
-
-async function callGeminiREST(
-  apiKey: string,
-  modelName: string,
-  fileBase64: string,
-  fileMime: string,
-  promptText: string
-): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-
-  const body = {
-    contents: [{
-      parts: [
-        { 
-          inline_data: { 
-            mime_type: fileMime, 
-            data: fileBase64 
-          } 
-        },
-        { text: promptText },
-      ],
-    }],
-    generationConfig: {
-      responseMimeType: 'application/json',
-    },
-  };
-
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-
-  if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    const msg = errData?.error?.message || `HTTP ${res.status}`;
-    throw new Error(msg);
-  }
-
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  return text;
-}
-
 // ─── Day normalizer ───────────────────────────────────────────────────────────
 
 function normalizeDay(dayInput: any): string | null {
@@ -217,75 +165,18 @@ export default function AITab({ settings, userId, onRefreshData, onImportAIResul
 
       setUploadProgress('Calling AI...');
 
-      if (!GEMINI_API_KEY) {
-        setError(
-          'Gemini API key not set. Add VITE_GEMINI_API_KEY to your ' +
-          '.env file locally, or Vercel Environment Variables for production.'
-        );
-        setAiParseFailed(true);
-        setLoading(false);
-        return;
-      }
+      const response = await fetch('/api/parse-syllabus', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fileBase64, fileMime, fileName }),
+      });
 
-      const promptText = `
-        You are an expert academic organizer and syllabus parser.
-        Analyze the provided syllabus PDF or timetable image and extract subjects and schedule.
-        Today's date: ${new Date().toISOString().split('T')[0]}.
+      setUploadProgress('Parsing...');
+      await new Promise(r => setTimeout(r, 200));
 
-        Extract:
-        1. All distinct academic subjects. For each:
-           - name (full subject name)
-           - code (subject code if visible, e.g. CS-301)
-           - facultyName (professor/teacher name if visible)
-           - credits (e.g. "4 Credits")
-           - semester (e.g. "Semester 3")
-           - minGoal (minimum attendance %, default 75)
-
-        2. Weekly timetable slots. For each slot:
-           - subjectName (matching a subject above)
-           - dayOfWeek (integer: 1=Monday ... 7=Sunday)
-           - period (integer starting from 1)
-
-        3. Any attendance records already visible in the document (optional).
-
-        Be accurate. Expand abbreviations to full names.
-      `;
-
-      let rawData: any = null;
-      let lastError: any = null;
-
-      for (const modelName of MODELS_TO_TRY) {
-        try {
-          const text = await callGeminiREST(
-            GEMINI_API_KEY,
-            modelName,
-            fileBase64,
-            fileMime,
-            promptText
-          );
-
-          if (!text) { 
-            lastError = new Error('Empty response from model'); 
-            continue; 
-          }
-
-          const cleaned = text
-            .replace(/^```json\s*/i, '')
-            .replace(/```\s*$/i, '')
-            .trim();
-          rawData = JSON.parse(cleaned);
-          break; // success — stop trying other models
-
-        } catch (err: any) {
-          lastError = err;
-          console.warn(`Model ${modelName} failed:`, err?.message);
-        }
-      }
-
-      if (!rawData) {
-        throw new Error(
-          `Gemini Error: ${lastError?.message || 'All models failed. Please try again.'}`
-        );
+      const rawData = await response.json();
+      if (!response.ok) {
+        throw new Error(rawData.error || 'Failed to parse document with AI.');
       }
 
       if (!Array.isArray(rawData.subjects) || rawData.subjects.length === 0) {
@@ -550,80 +441,95 @@ export default function AITab({ settings, userId, onRefreshData, onImportAIResul
         </div>
 
         {/* Results Panel */}
-        <div className="lg:col-span-7">
-          <div className={`${isLight ? 'bg-white border-slate-200 shadow-sm text-slate-900' : 'bg-[#0d0d0d] border-white/10 text-white'} border rounded-2xl p-6 min-h-[300px] flex flex-col justify-between`}>
+        <div className="lg:col-span-7 space-y-4">
+          <div className={`${isLight ? 'bg-white border-slate-200 shadow-sm text-slate-900' : 'bg-[#0d0d0d] border-white/10 text-white'} border rounded-2xl p-6 min-h-[400px] flex flex-col justify-between`}>
             <div>
-              <div className={`flex items-center justify-between mb-4 pb-3 border-b ${isLight ? 'border-slate-100' : 'border-white/5'}`}>
+              <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/5">
                 <h3 className={`text-sm font-semibold uppercase tracking-wider ${isLight ? 'text-slate-800' : 'text-white/80'}`}>
-                  2. Review AI Extracted Syllabus
+                  2. Extracted Academic Profile
                 </h3>
                 {parsedData && (
-                  <button onClick={handleApplyAIResults} className="px-3.5 py-1.5 bg-emerald-500/20 text-emerald-500 border border-emerald-500/30 rounded-lg text-xs font-bold uppercase tracking-wide flex items-center gap-1.5 hover:bg-emerald-500/30 transition-colors cursor-pointer">
-                    Sync to Dashboard <ArrowRight size={12} />
+                  <button
+                    onClick={handleApplyAIResults}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold uppercase tracking-wider flex items-center gap-1.5 transition-colors cursor-pointer shadow-lg shadow-emerald-500/20"
+                  >
+                    Sync to Dashboard <ArrowRight size={14} />
                   </button>
                 )}
               </div>
 
-              {!parsedData ? (
-                <div className={`py-12 text-center flex flex-col items-center justify-center ${isLight ? 'text-slate-400' : 'text-white/20'}`}>
-                  <Sparkles size={36} className={`mb-2 ${isLight ? 'text-slate-300' : 'text-white/10'}`} />
-                  <p className="text-xs max-w-sm">No scan performed yet. Upload your syllabus PDF above or add subjects manually.</p>
+              {!parsedData && !loading && (
+                <div className="py-20 text-center space-y-3">
+                  <FileText size={40} className={`mx-auto ${isLight ? 'text-slate-300' : 'text-white/10'}`} />
+                  <p className={`text-xs ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
+                    Upload and scan your syllabus to preview extracted subjects & timetable slots here.
+                  </p>
                 </div>
-              ) : (
+              )}
+
+              {loading && (
+                <div className="py-20 text-center space-y-3">
+                  <Loader2 size={32} className="mx-auto text-blue-500 animate-spin" />
+                  <p className={`text-xs font-mono ${isLight ? 'text-slate-600' : 'text-white/60'}`}>{uploadProgress || 'Processing document with AI...'}</p>
+                </div>
+              )}
+
+              {parsedData && (
                 <div className="space-y-5">
                   {/* Subjects */}
                   <div>
-                    <h4 className={`text-[10px] font-mono uppercase mb-2 ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
-                      Subjects Extracted ({parsedData.subjects.length})
+                    <h4 className={`text-[11px] font-mono uppercase tracking-wider mb-2 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>
+                      Detected Subjects ({parsedData.subjects.length})
                     </h4>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      {parsedData.subjects.map((s, i) => (
-                        <div key={i} className={`p-3 border rounded-xl text-xs space-y-1 ${isLight ? 'bg-slate-50 border-slate-200' : 'bg-white/5 border-white/10'}`}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      {parsedData.subjects.map((sub, i) => (
+                        <div key={i} className={`p-3 rounded-xl border text-xs space-y-1 ${isLight ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-white/5 border-white/10 text-white/90'}`}>
                           <div className="font-bold flex items-center justify-between">
-                            <span>{s.name}</span>
-                            {s.code && <span className="font-mono text-[10px] text-blue-500">{s.code}</span>}
+                            <span>{sub.name}</span>
+                            {sub.code && <span className="font-mono text-[10px] px-1.5 py-0.5 bg-blue-500/10 text-blue-500 rounded">{sub.code}</span>}
                           </div>
-                          <div className={`text-[10px] flex flex-wrap gap-2 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>
-                            {s.facultyName && <span>Faculty: {s.facultyName}</span>}
-                            {s.credits && <span>Credits: {s.credits}</span>}
+                          {sub.facultyName && <p className={`text-[11px] ${isLight ? 'text-slate-500' : 'text-white/50'}`}>Faculty: {sub.facultyName}</p>}
+                          <div className={`flex items-center gap-3 text-[10px] font-mono pt-1 ${isLight ? 'text-slate-400' : 'text-white/40'}`}>
+                            {sub.credits && <span>{sub.credits}</span>}
+                            <span>Goal: {sub.minGoal || 75}%</span>
                           </div>
                         </div>
                       ))}
                     </div>
                   </div>
 
-                  {/* Timetable */}
+                  {/* Timetable Slots */}
                   {parsedData.timetable.length > 0 && (
                     <div>
-                      <h4 className={`text-[10px] font-mono uppercase mb-2 ${isLight ? 'text-slate-500' : 'text-white/40'}`}>
-                        Schedule Slots ({parsedData.timetable.length})
+                      <h4 className={`text-[11px] font-mono uppercase tracking-wider mb-2 ${isLight ? 'text-slate-500' : 'text-white/50'}`}>
+                        Timetable Slots ({parsedData.timetable.length})
                       </h4>
-                      <div className="max-h-[160px] overflow-y-auto space-y-1.5">
+                      <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1">
                         {parsedData.timetable.map((t, i) => (
-                          <div key={i} className={`flex items-center justify-between px-3 py-1.5 rounded-lg text-xs ${isLight ? 'bg-slate-50' : 'bg-white/[0.02]'}`}>
-                            <span className="font-semibold">{t.subject}</span>
-                            <span className={`font-mono ${isLight ? 'text-slate-500' : 'text-white/40'}`}>{t.day} • Period {t.period}{t.room ? ` • ${t.room}` : ''}</span>
+                          <div key={i} className={`p-2.5 rounded-lg border text-xs flex items-center justify-between font-mono ${isLight ? 'bg-slate-50 border-slate-200 text-slate-800' : 'bg-white/5 border-white/10 text-white/90'}`}>
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-blue-500 w-20">{t.day}</span>
+                              <span className="px-2 py-0.5 bg-white/10 rounded text-[10px]">Period {t.period}</span>
+                            </div>
+                            <span className="font-sans font-medium">{t.subject}</span>
                           </div>
                         ))}
                       </div>
                     </div>
                   )}
 
-                  {/* Uncertain entries */}
+                  {/* Uncertain Entries */}
                   {uncertainEntries.length > 0 && (
-                    <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2">
-                      <p className="flex items-center gap-1.5 text-amber-500 text-xs font-bold">
-                        <HelpCircle size={14} /> Uncertain Entries ({uncertainEntries.length}) — Please Confirm
-                      </p>
-                      <div className="space-y-2 max-h-[140px] overflow-y-auto">
+                    <div>
+                      <h4 className="text-[11px] font-mono uppercase tracking-wider mb-2 text-amber-500 flex items-center gap-1.5">
+                        <HelpCircle size={13} /> Review Uncertain Entries ({uncertainEntries.length})
+                      </h4>
+                      <div className="space-y-2">
                         {uncertainEntries.map((ue, i) => (
-                          <div key={i} className={`p-2 rounded-lg border text-xs flex items-center justify-between gap-2 ${isLight ? 'bg-white border-amber-200' : 'bg-black/40 border-amber-500/20'}`}>
-                            <span className="font-semibold truncate">{ue.reason}</span>
-                            <div className="flex items-center gap-2 shrink-0">
-                              <select value={ue.guessedDay} onChange={e => { const u=[...uncertainEntries]; u[i].guessedDay=e.target.value; setUncertainEntries(u); }} className={`text-xs px-2 py-1 rounded border ${isLight ? 'bg-slate-50 border-slate-300' : 'bg-white/10 border-white/20 text-white'}`}>
-                                {['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'].map(d=><option key={d}>{d}</option>)}
-                              </select>
-                              <input type="number" min={1} max={10} value={ue.guessedPeriod} onChange={e => { const u=[...uncertainEntries]; u[i].guessedPeriod=Number(e.target.value); setUncertainEntries(u); }} className={`w-14 text-xs px-2 py-1 rounded border ${isLight ? 'bg-slate-50 border-slate-300' : 'bg-white/10 border-white/20 text-white'}`} />
+                          <div key={i} className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs space-y-2">
+                            <p className="text-amber-500 font-semibold">Reason: {ue.reason}</p>
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-[11px]">Suggested: {ue.guessedDay} - Period {ue.guessedPeriod} ({ue.guessedSubject})</span>
                               <button type="button" onClick={() => {
                                 if (parsedData) setParsedData({ ...parsedData, timetable: [...parsedData.timetable, { day: ue.guessedDay, period: ue.guessedPeriod, subject: ue.guessedSubject }] });
                                 setUncertainEntries(uncertainEntries.filter((_,j)=>j!==i));
