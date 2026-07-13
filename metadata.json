@@ -1,0 +1,6 @@
+{
+  "name": "Attendance Pro",
+  "description": "A polished attendance manager with smart visual analytics, goal triggers, and AI spreadsheet/image scanner.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
